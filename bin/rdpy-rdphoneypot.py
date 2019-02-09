@@ -22,7 +22,7 @@
 RDP Honey pot use Rss scenario file to simulate RDP server
 """
 
-import sys, os, getopt, time
+import sys, os, getopt, time, datetime, hpfeeds, socket, json
 
 from rdpy.core import log, error, rss
 from rdpy.protocol.rdp import rdp
@@ -31,7 +31,7 @@ from twisted.internet import reactor
 log._LOG_LEVEL = log.Level.INFO
 
 class HoneyPotServer(rdp.RDPServerObserver):
-    def __init__(self, controller, rssFileSizeList):
+    def __init__(self, controller, rssFileSizeList, hpc):
         """
         @param controller: {RDPServerController}
         @param rssFileSizeList: {Tuple} Tuple(Tuple(width, height), rssFilePath)
@@ -40,6 +40,7 @@ class HoneyPotServer(rdp.RDPServerObserver):
         self._rssFileSizeList = rssFileSizeList
         self._dx, self._dy = 0, 0
         self._rssFile = None
+        self._hpc = hpc
         
     def onReady(self):
         """
@@ -59,12 +60,9 @@ class HoneyPotServer(rdp.RDPServerObserver):
         
         domain, username, password = self._controller.getCredentials()
         hostname = self._controller.getHostname()
-        log.info("""Credentials:
-        \tdomain : %s
-        \tusername : %s
-        \tpassword : %s
-        \thostname : %s
-        """%(domain, username, password, hostname));
+        log.info("\n%s,domain:%s,username:%s,password:%s,hostname:%s"%(datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ'), domain, username, password, hostname))
+        #message_json = json.dumps({'hostname': hostname, 'domain': domain, 'username': username, 'password': password})
+        #send_hpfeeds(self._hpc, message_json);
         self.start()
         
     def onClose(self):
@@ -110,7 +108,7 @@ class HoneyPotServerFactory(rdp.ServerFactory):
     """
     @summary: Factory on listening events
     """
-    def __init__(self, rssFileSizeList, privateKeyFilePath, certificateFilePath):
+    def __init__(self, rssFileSizeList, hpc, privateKeyFilePath, certificateFilePath):
         """
         @param rssFileSizeList: {Tuple} Tuple(Tuple(width, height), rssFilePath)
         @param privateKeyFilePath: {str} file contain server private key (if none -> back to standard RDP security)
@@ -118,6 +116,7 @@ class HoneyPotServerFactory(rdp.ServerFactory):
         """
         rdp.ServerFactory.__init__(self, 16, privateKeyFilePath, certificateFilePath)
         self._rssFileSizeList = rssFileSizeList
+        self._hpc = hpc
         
     def buildObserver(self, controller, addr):
         """
@@ -125,8 +124,10 @@ class HoneyPotServerFactory(rdp.ServerFactory):
         @param addr: destination address
         @see: rdp.ServerFactory.buildObserver
         """
-        log.info("Connection from %s:%s"%(addr.host, addr.port))
-        return HoneyPotServer(controller, self._rssFileSizeList)
+        log.info("\n%s,Connection from %s:%s"%(datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ'), addr.host, addr.port))
+        message_json = json.dumps({'src_ip': addr.host, 'src_port': str(addr.port)})
+        send_hpfeeds(self._hpc, message_json)
+        return HoneyPotServer(controller, self._rssFileSizeList, self._hpc)
     
 def readSize(filePath):
     """
@@ -140,6 +141,28 @@ def readSize(filePath):
             return None
         elif e.type.value == rss.EventType.SCREEN:
             return e.event.width.value, e.event.height.value
+
+def get_hpc():
+    """
+    @summary: initialise hpfeeds connection
+    """
+    if (os.environ.get('HPFEEDS_SERVER') and os.environ.get('HPFEEDS_SECRET') and os.environ.get(
+            'HPFEEDS_IDENT') and os.environ.get('HPFEEDS_PORT') and os.environ.get('HPFEEDS_CHANNEL')):
+        try:
+            hpc = hpfeeds.new(os.environ.get('HPFEEDS_SERVER'), int(os.environ.get('HPFEEDS_PORT')), os.environ.get('HPFEEDS_IDENT'), os.environ.get('HPFEEDS_SECRET'))
+            log.info("hpfeeds connection successful")
+            return hpc
+
+        except (hpfeeds.FeedException, socket.error, hpfeeds.Disconnect), e:
+            log.info("hpfeeds connection not successful")
+            log.info("Exception while connecting to hpfeeds server: {0}".format(e))
+
+    return None
+
+def send_hpfeeds(hpc, message):
+    hpfchannel = os.environ.get('HPFEEDS_CHANNEL')
+    log.info("Sending message to hpfeedschannel '{0}': {1}".format(hpfchannel, message)) 
+    hpc.publish(hpfchannel, message)
     
 def help():
     """
@@ -150,6 +173,9 @@ def help():
             [-l listen_port default 3389] 
             [-k private_key_file_path (mandatory for SSL)] 
             [-c certificate_file_path (mandatory for SSL)] 
+    
+    Set the following env variables for hpfeeds-logging
+            HPFEEDS_SERVER, HPFEEDS_IDENT, HPFEEDS_SECRET, HPFEEDS_PORT, HPFEEDS_CHANNEL
     """
     
 if __name__ == '__main__':
@@ -175,10 +201,20 @@ if __name__ == '__main__':
     
     #build size map
     log.info("Build size map")
+
     for arg in args:
         size = readSize(arg)
         rssFileSizeList.append((size, arg))
         log.info("(%s, %s) -> %s"%(size[0], size[1], arg))
-    
-    reactor.listenTCP(int(listen), HoneyPotServerFactory(rssFileSizeList, privateKeyFilePath, certificateFilePath))
-    reactor.run()
+
+    log.info("Establish hpfeeds connection")
+
+    hpc = get_hpc()
+
+    if hpc:
+        reactor.listenTCP(int(listen), HoneyPotServerFactory(rssFileSizeList, hpc, privateKeyFilePath, certificateFilePath))
+        reactor.run()
+
+    else:
+        log.error("Error establishing hpfeeds connection")
+
