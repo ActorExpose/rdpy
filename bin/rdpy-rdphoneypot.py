@@ -61,8 +61,6 @@ class HoneyPotServer(rdp.RDPServerObserver):
         domain, username, password = self._controller.getCredentials()
         hostname = self._controller.getHostname()
         log.info("\n%s,domain:%s,username:%s,password:%s,hostname:%s"%(datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ'), domain, username, password, hostname))
-        #message_json = json.dumps({'hostname': hostname, 'domain': domain, 'username': username, 'password': password})
-        #send_hpfeeds(self._hpc, message_json);
         self.start()
         
     def onClose(self):
@@ -125,7 +123,7 @@ class HoneyPotServerFactory(rdp.ServerFactory):
         @see: rdp.ServerFactory.buildObserver
         """
         log.info("\n%s,Connection from %s:%s"%(datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.%fZ'), addr.host, addr.port))
-        message_json = json.dumps({'src_ip': addr.host, 'src_port': str(addr.port)})
+        message_json = json.dumps({'src_ip': addr.host, 'src_port': str(addr.port), 'dst_ip': os.environ.get('HPFEEDS_CLIENT'), 'dst_port': '3389'})
         send_hpfeeds(self._hpc, message_json)
         return HoneyPotServer(controller, self._rssFileSizeList, self._hpc)
     
@@ -175,7 +173,7 @@ def help():
             [-c certificate_file_path (mandatory for SSL)] 
     
     Set the following env variables for hpfeeds-logging
-            HPFEEDS_SERVER, HPFEEDS_IDENT, HPFEEDS_SECRET, HPFEEDS_PORT, HPFEEDS_CHANNEL
+            HPFEEDS_SERVER, HPFEEDS_IDENT, HPFEEDS_SECRET, HPFEEDS_PORT, HPFEEDS_CHANNEL, HPFEEDS_CLIENT
     """
     
 if __name__ == '__main__':
